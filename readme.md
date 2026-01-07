@@ -1,19 +1,22 @@
-# 🦀 CrabKV
+# 🦀 CrabKV: Based Async Store
 
-**CrabKV** is a high-performance, asynchronous, persistent key-value store written in Rust. It is designed from the ground up using **Tokio** to handle high concurrency, featuring Write-Ahead Logging (WAL) for durability and periodic snapshots for fast recovery.
+Yo, this is **CrabKV**. We built this in **Rust** because C++ is legacy bloat and we don't do memory leaks.
 
-## ⚡ Features
+It’s an async, persistent key-value store running on **Tokio**. It’s fully non-blocking, memory safe, and honestly just built different.
 
-* **Async Core**: Built on the **Tokio** runtime using an actor-based architecture (MPSC channels) to eliminate mutex contention on the hot path.
-* **Durability**:
-* **WAL (Write-Ahead Log)**: Every write operation is appended to `wal.log` immediately.
-* **Snapshots**: State is periodically flushed to `snapshot.json` to speed up restarts.
+**Status:** Goated. 🐐
 
+## 🗿 Why It’s Based (Features)
 
-* **Key Expiration**: Native support for TTL (Time-To-Live) via `SETEX` and `EXPIRE`.
-* **Protocol**: Simple text-based TCP protocol (Redis-compatible for basic commands).
+* **Async Core ⚡**: Built on the Actor Model because mutex locks are for boomers. We use channels. Pure throughput. No cap.
+* **Persistent (WAL) 📝**: We log every write to `wal.log` instantly. Server crash? Skill issue. We recover instantly.
+* **Snapshots 📸**: We dump the DB state to `snapshot.json` so cold starts are instant.
+* **TTL (Ghost) 👻**: Keys expire automatically. Clean up your garbage. (`SETEX`, `EXPIRE`).
+* **Protocol 🤝**: Simple TCP text protocol. `netcat` friendly.
 
-## 📂 Project Structure
+## 📂 The Stack (Structure)
+
+Clean architecture only.
 
 ```text
 ├── src
@@ -32,62 +35,66 @@
 
 ```
 
-## 🚀 Getting Started
+## 🚀 Deployment
 
-### Prerequisites
+### Prereqs
 
-* Rust (latest stable)
-* Cargo
+* **Rust**: If you aren't on the latest stable toolchain, what are you even doing?
 
-### Installation & Run
+### Run It
+
+Clone it, ship it.
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/crabkv.git
+# Clone
+git clone https://github.com/Shan-N/crabkv.git
 
-# Run the server in release mode
+# Release Build (Debug is for weakness)
 cargo run --release
 
 ```
 
-The server will start listening on `127.0.0.1:3000`.
+Server binds to `127.0.0.1:3000`. We live.
 
-### Basic Usage
+### Usage
 
-You can interact with CrabKV using `netcat`, `telnet`, or `redis-cli` (for supported text commands).
+Hit it with `nc` or telnet.
 
 ```bash
 $ nc localhost 3000
-SET user:1 rustacean
+SET performance yes
 OK
-GET user:1
-rustacean
-SETEX session active 10
+GET performance
+yes
+SETEX temp_data 10 gone
 OK
-TTL session
+TTL temp_data
 9
 
 ```
 
-## 🛠 Supported Commands
+## 🛠 Command Tier List
 
-| Command | Syntax | Description |
+| Command | Usage | Description |
 | --- | --- | --- |
-| **SET** | `SET key value` | Store a string value. |
-| **GET** | `GET key` | Retrieve a value. |
-| **DEL** | `DEL key` | Delete a key. |
-| **SETEX** | `SETEX key val ttl` | Set key with expiration (seconds). |
-| **EXPIRE** | `EXPIRE key ttl` | Set a timeout on an existing key. |
-| **TTL** | `TTL key` | Get remaining time to live. |
+| **SET** | `SET k v` | Lock it in. 🔒 |
+| **GET** | `GET k` | Fetch the alpha. |
+| **DEL** | `DEL k` | Nuke it. 💥 |
+| **SETEX** | `SETEX k t v` | Ephemeral storage. |
+| **TTL** | `TTL k` | Countdown. |
 
-## 🗺 Roadmap
+## 🗺 Grindset (Roadmap)
 
-The current version runs a single engine instance. The immediate next step is scaling:
+We are single-threaded right now (MVP vibes), but the scale-up is coming.
 
-* [ ] **Sharding**: `todo!("add sharding")` — Implement data partitioning to split the keyspace across multiple engine actors to utilize multiple cores and reduce lock contention.
-* [ ] **Binary Protocol**: Move to a binary protocol for lower parsing overhead (RESP).
-* [ ] **Client Lib**: Develop a dedicated Rust client crate for CrabKV.
+* [ ] **Sharding**: `todo!("add sharding")` — **CRITICAL**. We need to split the keyspace to saturate all cores. We scaling to the moon. 🚀
+* [ ] **Binary Protocol**: Text parsing is CPU waste. We switching to binary.
+* [ ] **Client Lib**: Native Rust crate incoming.
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+MIT. Fork it. Ship it.
+
+---
+
+**Built with 🦀 and Sleep Deprivation by Shannn.**
