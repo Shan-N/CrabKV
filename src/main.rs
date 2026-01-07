@@ -14,4 +14,6 @@ async fn main() {
     engine::start_wal_task(wal_rx);
 
     server::run(listener, cmd_tx).await;
+
+    // todo!("add sharding support");
 }
