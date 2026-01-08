@@ -63,6 +63,20 @@ pub enum ParsedCommand {
     },
 }
 
+impl Command {
+    pub fn primary_key(&self) -> &str {
+        match self {
+            Command::Set { key, .. } => key,
+            Command::Get { key, .. } => key,
+            Command::Del { key, .. } => key,
+            Command::SetEx { key, .. } => key,
+            Command::Expire { key, .. } => key,
+            Command::Ex { key, .. } => key,
+            Command::Ttl { key, .. } => key,
+        }
+    }
+}
+
 pub enum WalCommand {
     Write(String),
     Truncate,

@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+fxhash = "0.2.1"
 serde_json = "1.0.148"
 tokio = { version = "1.49.0", features = ["full"] }

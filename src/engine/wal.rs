@@ -9,12 +9,13 @@ use tokio::{task, time};
 use super::{Command, WalCommand, apply_db, parse_command, save_snapshot};
 use crate::engine::apply::now_ms;
 
-pub fn start_wal_task(mut wal_rx: Receiver<WalCommand>) {
+pub fn start_wal_task(shard_id: usize, mut wal_rx: Receiver<WalCommand>) {
+    let filename = format!("wal_{}.log", shard_id);
     task::spawn(async move {
         let mut wal = OpenOptions::new()
             .create(true)
             .append(true)
-            .open("wal.log")
+            .open(&filename)
             .await
             .expect("Failed to open WAL");
 
@@ -40,7 +41,7 @@ pub fn start_wal_task(mut wal_rx: Receiver<WalCommand>) {
     });
 }
 
-pub fn start_engine(mut cmd_rx: Receiver<Command>, wal_tx: Sender<WalCommand>) {
+pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Sender<WalCommand>) {
     task::spawn(async move {
         let mut db: HashMap<String, String> = HashMap::new();
         let mut ttl_db: HashMap<String, u64> = HashMap::new();
@@ -49,8 +50,10 @@ pub fn start_engine(mut cmd_rx: Receiver<Command>, wal_tx: Sender<WalCommand>) {
         let mut snapshot_interval = time::interval(Duration::from_secs(10));
         let mut cleanup_interval = time::interval(Duration::from_millis(100));
 
+        let snapshot_file = format!("snapshot_{}.json", shard_id);
+
         // --- 1. Load Snapshot (Fixed to handle TTLs) ---
-        if let Ok(snapshot_data) = tokio::fs::read_to_string("snapshot.json").await {
+        if let Ok(snapshot_data) = tokio::fs::read_to_string(&snapshot_file).await {
             // Try to load as a tuple (db, ttl_db)
             if let Ok((loaded_db, loaded_ttl)) = serde_json::from_str::<(
                 HashMap<String, String>,
@@ -72,8 +75,9 @@ pub fn start_engine(mut cmd_rx: Receiver<Command>, wal_tx: Sender<WalCommand>) {
             }
         }
 
+        let wal_file = format!("wal_{}.log", shard_id);
         // --- 2. Replay WAL ---
-        if let Ok(wal_content) = tokio::fs::read_to_string("wal.log").await {
+        if let Ok(wal_content) = tokio::fs::read_to_string(&wal_file).await {
             for line in wal_content.lines() {
                 if let Some(cmd) = parse_command(line) {
                     apply_db(&mut db, &mut ttl_db, &mut expiry_heap, cmd);
@@ -112,7 +116,7 @@ pub fn start_engine(mut cmd_rx: Receiver<Command>, wal_tx: Sender<WalCommand>) {
 
                     task::spawn_blocking(move || {
                         let combined_state = (db_snapshot, ttl_snapshot);
-                        save_snapshot(&combined_state.0, &combined_state.1);
+                        save_snapshot(shard_id,&combined_state.0, &combined_state.1);
                     }).await.unwrap();
 
 

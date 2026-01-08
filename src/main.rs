@@ -1,19 +1,21 @@
-use tokio::{net::TcpListener, sync::mpsc};
+use std::sync::Arc;
+
+use tokio::net::TcpListener;
+
+use crate::shard_engine::router::ShardRouter;
 
 mod engine;
 mod server;
+mod shard_engine;
+
+const NUM_SHARDS: usize = 4;
 
 #[tokio::main]
 async fn main() {
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Server listening on port 3000");
-    let (cmd_tx, cmd_rx) = mpsc::channel(100);
-    let (wal_tx, wal_rx) = mpsc::channel(100);
+    let shards = shard_engine::engine::spawn_shards(NUM_SHARDS);
+    let router = Arc::new(ShardRouter::new(shards));
 
-    engine::start_engine(cmd_rx, wal_tx.clone());
-    engine::start_wal_task(wal_rx);
-
-    server::run(listener, cmd_tx).await;
-
-    // todo!("add sharding support");
+    server::run(listener, router.clone()).await;
 }

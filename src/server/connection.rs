@@ -1,13 +1,15 @@
-use crate::engine::{Command, ParsedCommand, parse_command};
-use std::net::SocketAddr;
+use crate::{
+    engine::{Command, ParsedCommand, parse_command},
+    shard_engine::router::ShardRouter,
+};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::mpsc::Sender,
     sync::oneshot,
 };
 
-pub async fn handle_connection(mut socket: TcpStream, addr: SocketAddr, cmd_tx: Sender<Command>) {
+pub async fn handle_connection(mut socket: TcpStream, addr: SocketAddr, router: Arc<ShardRouter>) {
     let mut buf = Vec::new();
     println!("New connection from {}", addr);
     loop {
@@ -48,7 +50,8 @@ pub async fn handle_connection(mut socket: TcpStream, addr: SocketAddr, cmd_tx: 
                     ParsedCommand::Ex { key } => Command::Ex { key, resp: resp_tx },
                 };
 
-                cmd_tx.send(cmd).await.unwrap();
+                // cmd_tx.send(cmd).await.unwrap();
+                router.route(cmd).await;
                 let response = resp_rx.await.unwrap();
                 socket.write_all(response.as_bytes()).await.unwrap();
             }
