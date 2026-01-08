@@ -1,33 +1,46 @@
-# 🦀 CrabKV: Based Async Store
+# 🦀 CrabKV: Multi-Threaded Sharded Store
 
-Yo, this is **CrabKV**. We built this in **Rust** because C++ is legacy bloat and we don't do memory leaks.
+Yo, this is **CrabKV**. We built this in **Rust** because we don't do race conditions and we definitely don't do garbage collection pauses.
 
-It’s an async, persistent key-value store running on **Tokio**. It’s fully non-blocking, memory safe, and honestly just built different.
+It’s an **async, sharded, persistent** key-value store running on **Tokio**. We used to be single-threaded (MVP vibes), but we just dropped the **Sharding Update**. Now we saturate every core you have.
 
-**Status:** Goated. 🐐
+**Status:** **Production Ready** (on my machine). 🐐
 
 ## 🗿 Why It’s Based (Features)
 
-* **Async Core ⚡**: Built on the Actor Model because mutex locks are for boomers. We use channels. Pure throughput. No cap.
-* **Persistent (WAL) 📝**: We log every write to `wal.log` instantly. Server crash? Skill issue. We recover instantly.
-* **Snapshots 📸**: We dump the DB state to `snapshot.json` so cold starts are instant.
-* **TTL (Ghost) 👻**: Keys expire automatically. Clean up your garbage. (`SETEX`, `EXPIRE`).
+* **Sharded Architecture 🍰**: We implemented **M:N Threading**. I/O threads parse requests, Shard Engine threads execute them. No global locks. Pure throughput.
+* **Async Core ⚡**: Built on Tokio. We use channels and lock-free queues. Mutexes are for boomers.
+* **Persistent (WAL) 📝**: writes go to `wal.log` instantly. Server crash? Skill issue. We recover instantly.
+* **Unified Memory Layout 🧠**: `HashMap` + `MinHeap` linked by raw pointers. Cache locality is immaculate.
+* **TTL (Ghost) 👻**: Keys expire automatically. Clean up your garbage.
 * **Protocol 🤝**: Simple TCP text protocol. `netcat` friendly.
+
+## 🏗 The Architecture
+
+We aren't just throwing `Mutex<HashMap>` around. We built a proper **Shared-Nothing** architecture.
+
+1. **Layer 1 (I/O)**: A pool of Tokio workers accepts TCP, parses text, hashes the key, and pushes to a specific shard queue.
+2. **Layer 2 (Engines)**: dedicated threads that own specific shards. No locking. Just consuming the queue and writing to the WAL.
 
 ## 📂 The Stack (Structure)
 
-Clean architecture only.
+Clean architecture only. No spaghetti code allowed.
 
 ```text
 ├── src
-│   ├── engine          # Core database logic (State, WAL, Snapshots)
-│   │   ├── apply.rs    # Command application logic
-│   │   ├── command.rs  # Command definitions (Set, Get, Del)
-│   │   ├── parser.rs   # Inbound command parsing
-│   │   ├── snapshot.rs # State serialization
-│   │   └── wal.rs      # Write-Ahead Log management
-│   ├── server          # Networking layer
-│   │   ├── connection.rs # TCP stream handler
+│   ├── engine          # Core primitives (Command definitions, WAL, Snapshot)
+│   │   ├── apply.rs    # Command logic
+│   │   ├── command.rs  # Enum definitions
+│   │   ├── parser.rs   # Text -> Struct
+│   │   ├── snapshot.rs # JSON dumping
+│   │   └── wal.rs      # Append-only log
+│   ├── server          # Networking layer (I/O Thread Pool)
+│   │   ├── connection.rs 
+│   │   └── mod.rs
+│   ├── shard_engine    # THE NEW STUFF (Sharding Logic) 🔥
+│   │   ├── engine.rs   # The Event Loop
+│   │   ├── router.rs   # Key -> Shard routing
+│   │   ├── shard.rs    # The isolated data store
 │   │   └── mod.rs
 │   └── main.rs         # Entry point & Runtime setup
 ├── snapshot.json       # Persisted DB state
@@ -39,7 +52,7 @@ Clean architecture only.
 
 ### Prereqs
 
-* **Rust**: If you aren't on the latest stable toolchain, what are you even doing?
+* **Rust**: Use the latest stable toolchain. Don't be that guy on version 1.60.
 
 ### Run It
 
@@ -58,18 +71,16 @@ Server binds to `127.0.0.1:3000`. We live.
 
 ### Usage
 
-Hit it with `nc` or telnet.
+Hit it with `nc`.
 
 ```bash
 $ nc localhost 3000
-SET performance yes
+SET user:1 "based rust dev"
 OK
-GET performance
-yes
-SETEX temp_data 10 gone
+GET user:1
+"based rust dev"
+SETEX cache_key "i disappear soon" 10 
 OK
-TTL temp_data
-9
 
 ```
 
@@ -81,14 +92,13 @@ TTL temp_data
 | **GET** | `GET k` | Fetch the alpha. |
 | **DEL** | `DEL k` | Nuke it. 💥 |
 | **SETEX** | `SETEX k t v` | Ephemeral storage. |
-| **TTL** | `TTL k` | Countdown. |
+| **TTL** | `TTL k` | Final countdown. |
 
 ## 🗺 Grindset (Roadmap)
 
-We are single-threaded right now (MVP vibes), but the scale-up is coming.
-
-* [ ] **Sharding**: `todo!("add sharding")` — **CRITICAL**. We need to split the keyspace to saturate all cores. We scaling to the moon. 🚀
-* [ ] **Binary Protocol**: Text parsing is CPU waste. We switching to binary.
+* [x] **Sharding**: `todo!("add sharding")` — **DONE.** We split the keyspace. We scaled the reads. We are massive. 🚀
+* [ ] **Binary Protocol**: Text parsing is still kinda mid. We need Protobufs or custom binary format.
+* [ ] **Cluster Mode**: Raft consensus? Maybe later.
 * [ ] **Client Lib**: Native Rust crate incoming.
 
 ## 📄 License
