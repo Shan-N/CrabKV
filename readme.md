@@ -93,8 +93,10 @@ OK
 | **SET** | `SET k v` | Lock it in. 🔒 |
 | **GET** | `GET k` | Fetch the alpha. |
 | **DEL** | `DEL k` | Nuke it. 💥 |
-| **SETEX** | `SETEX k t v` | Ephemeral storage. |
+| **SETEX** | `SETEX k v t` | Ephemeral storage. |
 | **TTL** | `TTL k` | Final countdown. |
+| **EXPIRE** | `EXPIRE k t` | Time Stone. |
+| **EX** | `EX k` | Valid. |
 
 ## 🗺 Grindset (Roadmap)
 

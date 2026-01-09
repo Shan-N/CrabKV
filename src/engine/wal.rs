@@ -52,9 +52,7 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
 
         let snapshot_file = format!("snapshot_{}.json", shard_id);
 
-        // --- 1. Load Snapshot (Fixed to handle TTLs) ---
         if let Ok(snapshot_data) = tokio::fs::read_to_string(&snapshot_file).await {
-            // Try to load as a tuple (db, ttl_db)
             if let Ok((loaded_db, loaded_ttl)) = serde_json::from_str::<(
                 HashMap<String, String>,
                 HashMap<String, u64>,
@@ -65,18 +63,16 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
             } else if let Ok(loaded_db) =
                 serde_json::from_str::<HashMap<String, String>>(&snapshot_data)
             {
-                // Fallback: If snapshot only contains db (backward compatibility)
+
                 db = loaded_db;
             }
 
-            // Rebuild the expiry heap from the loaded TTLs
             for (k, v) in &ttl_db {
                 expiry_heap.push(Reverse((*v, k.clone())));
             }
         }
 
         let wal_file = format!("wal_{}.log", shard_id);
-        // --- 2. Replay WAL ---
         if let Ok(wal_content) = tokio::fs::read_to_string(&wal_file).await {
             for line in wal_content.lines() {
                 if let Some(cmd) = parse_command(line) {
@@ -87,16 +83,13 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
 
         loop {
             tokio::select! {
-                // --- 3. Expiration Task ---
                 _ = cleanup_interval.tick() => {
                     let now = now_ms();
                     let mut expired_count = 0;
-                    // Limit how many keys we scan per tick to avoid blocking
                     while expired_count < 200 {
                         match expiry_heap.peek() {
                             Some(Reverse((exp, _))) if *exp <= now => {
                                 let Reverse((exp2, key)) = expiry_heap.pop().unwrap();
-                                // Only delete if the TTL in heap matches the actual DB (handles overwrites)
                                 if ttl_db.get(&key) == Some(&exp2) {
                                     db.remove(&key);
                                     ttl_db.remove(&key);
@@ -108,7 +101,6 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
                     }
                 }
 
-                // --- 4. Snapshot Task ---
                 _ = snapshot_interval.tick() => {
                     let db_snapshot = db.clone();
                     let ttl_snapshot = ttl_db.clone();

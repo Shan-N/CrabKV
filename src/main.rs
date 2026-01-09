@@ -10,7 +10,7 @@ mod shard_engine;
 
 const NUM_SHARDS: usize = 4;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 6)]
 async fn main() {
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Server listening on port 3000");
