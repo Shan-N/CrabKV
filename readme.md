@@ -24,6 +24,25 @@ We aren't just throwing `Mutex<HashMap>` around. We built a proper **Shared-Noth
 
 ![Architecture Flow](arch.png)
 
+## 📊 Benchmarks (The Receipts)
+
+We didn't just shard it for fun. We sharded it to mog single-threaded databases.
+
+Tested on a **MacBook Air M4**. Yes, the **fanless** one. We saturated the cores and the chassis didn't even get warm. That's the power of Rust on Apple Silicon.
+
+| Metric | Single Shard (Legacy) | Multi-Shard (Current) 🚀 | Improvement |
+| --- | --- | --- | --- |
+| **Write OPS** | ~2,000 | **~50,000** | **25x** 📈 |
+| **Read OPS** | ~5,000 | **~200,000** | **40x** 🔥 |
+| **Contention** | Global Lock Hell | **Zero.** | **Infinite** |
+| **Thermals** | Toasty | **Ice Cold** | **Efficiency** |
+
+Tested with Node.js server sending 1500 concurrent connections with 80% GET and 20% SET, we mog you bro🥀
+
+*> "Runs on an M4 Air. Uses less battery than your Chrome tabs."*
+
+![benchmarks](bench.png)
+
 ## 📂 The Stack (Structure)
 
 Clean architecture only. No spaghetti code allowed.
