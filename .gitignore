@@ -1,3 +1,4 @@
 /target
-snapshot_*.json
-wal_*.log
+
+*.json
+*.log

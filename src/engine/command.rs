@@ -33,6 +33,9 @@ pub enum Command {
         key: String,
         resp: oneshot::Sender<String>,
     },
+    Ping {
+        resp: oneshot::Sender<String>,
+    },
 }
 
 pub enum ParsedCommand {
@@ -61,6 +64,7 @@ pub enum ParsedCommand {
     Ttl {
         key: String,
     },
+    Ping
 }
 
 impl Command {
@@ -73,6 +77,7 @@ impl Command {
             Command::Expire { key, .. } => key,
             Command::Ex { key, .. } => key,
             Command::Ttl { key, .. } => key,
+            Command::Ping { .. } => "",
         }
     }
 }

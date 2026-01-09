@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{task, time};
 
@@ -12,28 +12,51 @@ use crate::engine::apply::now_ms;
 pub fn start_wal_task(shard_id: usize, mut wal_rx: Receiver<WalCommand>) {
     let filename = format!("wal_{}.log", shard_id);
     task::spawn(async move {
-        let mut wal = OpenOptions::new()
+        let wal = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&filename)
             .await
             .expect("Failed to open WAL");
 
-        while let Some(entry) = wal_rx.recv().await {
-            match entry {
-                WalCommand::Write(s) => {
-                    if let Err(e) = wal.write_all(s.as_bytes()).await {
-                        eprintln!("WAL write error: {}", e);
-                    }
-                    let _ = wal.sync_all().await;
+        let mut writer = BufWriter::with_capacity(64 * 1024, wal);
+
+        let mut sync_interval = time::interval(Duration::from_secs(1));
+
+        loop {
+            tokio::select! {
+                _ = sync_interval.tick() => {
+                    let _ = writer.flush().await;
+                    let _ = writer.get_ref().sync_all().await;
                 }
-                WalCommand::Truncate => {
-                    if let Err(e) = wal.set_len(0).await {
-                        eprintln!("WAL truncate error: {}", e);
-                    }
-                    let _ = wal.sync_all().await;
-                    if let Err(e) = wal.seek(std::io::SeekFrom::Start(0)).await {
-                        eprintln!("WAL seek error: {}", e);
+
+                entry = wal_rx.recv() => {
+                    match entry {
+                        Some(WalCommand::Write(s)) => {
+                            let _ = writer.write_all(s.as_bytes()).await;
+
+                            while let Ok(next_entry) = wal_rx.try_recv() {
+                                match next_entry {
+                                    WalCommand::Write(s) => {
+                                        let _ = writer.write_all(s.as_bytes()).await;
+                                    }
+                                    WalCommand::Truncate => {
+                                        let _ = writer.flush().await;
+                                        let wal = writer.get_mut();
+                                        let _ = wal.set_len(0).await;
+                                        let _ = wal.seek(std::io::SeekFrom::Start(0)).await;
+                                    }
+                                }
+                            }
+                            let _ = writer.flush().await;
+                        }
+                        Some(WalCommand::Truncate) => {
+                            let _ = writer.flush().await;
+                            let wal = writer.get_mut();
+                            let _ = wal.set_len(0).await;
+                            let _ = wal.seek(std::io::SeekFrom::Start(0)).await;
+                        }
+                        None => break,
                     }
                 }
             }
@@ -112,40 +135,42 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
                     }).await.unwrap();
 
 
-                    let _ = wal_tx_clone.send(WalCommand::Truncate).await;
+                    let _ = wal_tx_clone.try_send(WalCommand::Truncate);
                 }
 
                 Some(cmd) = cmd_rx.recv() => {
                     let now = now_ms();
                     match cmd {
                         Command::Set { key, value, resp } => {
-                            let _ = wal_tx.send(WalCommand::Write(format!("SET {} {}\n", key, value))).await;
+                            let log = format!("SET {} {}\n", key, value);
+                            let _ = wal_tx.try_send(WalCommand::Write(log));
                             db.insert(key, value);
                             let _ = resp.send("OK\n".to_string());
                         }
                         Command::SetEx { key, value, ttl, resp } => {
+                            let log = format!("SETEX {} {} {}\n", key, value, ttl);
                             let expiry = now + ttl * 1000;
-                            let _ = wal_tx.send(WalCommand::Write(format!("SETEX {} {} {}\n", key, value, ttl))).await;
+                            let _ = wal_tx.try_send(WalCommand::Write(log));
                             db.insert(key.clone(), value);
                             ttl_db.insert(key.clone(), expiry);
                             expiry_heap.push(Reverse((expiry, key)));
                             let _ = resp.send("OK\n".to_string());
                         }
                         Command::Get { key, resp } => {
-                            // Lazy expiration check on Access
                             if let Some(&expiry) = ttl_db.get(&key) {
                                 if expiry <= now {
                                     db.remove(&key);
                                     ttl_db.remove(&key);
                                 }
                             }
-                            let value = db.get(&key).cloned().unwrap_or_else(|| "nil".into());
+                            let value = db.get(&key).cloned().unwrap_or_else(|| "nil\n".into());
                             let _ = resp.send(value);
                         }
                         Command::Expire { key, ttl, resp } => {
+                            let log = format!("EXPIRE {} {}\n", key, ttl);
                             if db.contains_key(&key) {
                                 let expiry = now + ttl * 1000;
-                                let _ = wal_tx.send(WalCommand::Write(format!("EXPIRE {} {}\n", key, ttl))).await;
+                                let _ = wal_tx.try_send(WalCommand::Write(log));
                                 ttl_db.insert(key.clone(), expiry);
                                 expiry_heap.push(Reverse((expiry, key)));
                                 let _ = resp.send("1".into());
@@ -154,7 +179,8 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
                             }
                         }
                         Command::Del { key, resp } => {
-                            let _ = wal_tx.send(WalCommand::Write(format!("DEL {}\n", key))).await;
+                            let log = format!("DEL {}\n", key);
+                            let _ = wal_tx.try_send(WalCommand::Write(log));
                             let removed = db.remove(&key).is_some();
                             ttl_db.remove(&key);
                             let _ = resp.send(if removed { "1".into() } else { "0".into() });
@@ -179,6 +205,10 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
                                 let _ = resp.send("-1".into());
                             }
                         }
+                        Command::Ping { resp } => {
+                            let _ = resp.send("PONG\n".to_string());
+                        }
+                        
                     }
                 }
             }

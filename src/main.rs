@@ -8,7 +8,7 @@ mod engine;
 mod server;
 mod shard_engine;
 
-const NUM_SHARDS: usize = 4;
+const NUM_SHARDS: usize = 16;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 6)]
 async fn main() {

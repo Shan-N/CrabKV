@@ -27,6 +27,9 @@ pub fn parse_command(input: &str) -> Option<ParsedCommand> {
         ["TTL", key] => Some(ParsedCommand::Ttl {
             key: key.to_string(),
         }),
+        ["PING"] => Some(ParsedCommand::Ping {
+            
+        }),
         _ => None,
     }
 }
