@@ -22,6 +22,8 @@ We aren't just throwing `Mutex<HashMap>` around. We built a proper **Shared-Noth
 1. **Layer 1 (I/O)**: A pool of Tokio workers accepts TCP, parses text, hashes the key, and pushes to a specific shard queue.
 2. **Layer 2 (Engines)**: dedicated threads that own specific shards. No locking. Just consuming the queue and writing to the WAL.
 
+![Architecture Flow](arch.png)
+
 ## 📂 The Stack (Structure)
 
 Clean architecture only. No spaghetti code allowed.
