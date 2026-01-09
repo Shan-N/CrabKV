@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 pub enum Command {
@@ -83,6 +84,27 @@ impl Command {
 }
 
 pub enum WalCommand {
-    Write(String),
+    Write(Vec<u8>),
     Truncate,
+}
+
+
+#[derive(Serialize, Deserialize)]
+pub enum WalEntry {
+    Set {
+        key: String,
+        value: String,
+    },
+    SetEx {
+        key: String,
+        value: String,
+        ttl: u64,
+    },
+    Del {
+        key: String,
+    },
+    Expire {
+        key: String,
+        ttl: u64,
+    }
 }

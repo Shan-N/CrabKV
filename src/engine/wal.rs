@@ -1,13 +1,16 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::mem;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{task, time};
 
-use super::{Command, WalCommand, apply_db, parse_command, save_snapshot};
+use super::{Command, WalCommand, apply_db, save_snapshot};
 use crate::engine::apply::now_ms;
+use crate::engine::command::WalEntry;
+use crate::engine::ParsedCommand;
 
 pub fn start_wal_task(shard_id: usize, mut wal_rx: Receiver<WalCommand>) {
     let filename = format!("wal_{}.log", shard_id);
@@ -20,41 +23,49 @@ pub fn start_wal_task(shard_id: usize, mut wal_rx: Receiver<WalCommand>) {
             .expect("Failed to open WAL");
 
         let mut writer = BufWriter::with_capacity(64 * 1024, wal);
-
-        let mut sync_interval = time::interval(Duration::from_secs(1));
+        let mut buffer = Vec::with_capacity(128 * 1024);
+        let mut sync_interval = time::interval(Duration::from_millis(5));
 
         loop {
             tokio::select! {
                 _ = sync_interval.tick() => {
-                    let _ = writer.flush().await;
-                    let _ = writer.get_ref().sync_all().await;
+                    if !buffer.is_empty() {
+                        let _ = writer.write_all(&buffer).await;
+                        buffer.clear();
+                    }
                 }
 
                 entry = wal_rx.recv() => {
                     match entry {
                         Some(WalCommand::Write(s)) => {
-                            let _ = writer.write_all(s.as_bytes()).await;
+                            buffer.extend_from_slice(&s);
 
-                            while let Ok(next_entry) = wal_rx.try_recv() {
-                                match next_entry {
-                                    WalCommand::Write(s) => {
-                                        let _ = writer.write_all(s.as_bytes()).await;
-                                    }
-                                    WalCommand::Truncate => {
-                                        let _ = writer.flush().await;
-                                        let wal = writer.get_mut();
-                                        let _ = wal.set_len(0).await;
-                                        let _ = wal.seek(std::io::SeekFrom::Start(0)).await;
-                                    }
-                                }
+                            if buffer.len() >= 128 * 1024 {
+                                let _ = writer.write_all(&buffer).await;
+                                let _ = writer.flush().await;
+                                buffer.clear();
                             }
-                            let _ = writer.flush().await;
                         }
                         Some(WalCommand::Truncate) => {
-                            let _ = writer.flush().await;
-                            let wal = writer.get_mut();
-                            let _ = wal.set_len(0).await;
-                            let _ = wal.seek(std::io::SeekFrom::Start(0)).await;
+                            // 1. Flush BufWriter internal buffer to file
+                            writer.flush().await.unwrap();
+
+                            // 2. Write our extra WAL batch buffer directly to file
+                            if !buffer.is_empty() {
+                                let file = writer.get_mut();
+                                file.write_all(&buffer).await.unwrap();
+                                file.flush().await.unwrap();
+                                buffer.clear();
+                            }
+
+                            // 3. Truncate file to zero
+                            let file = writer.get_mut();
+                            file.set_len(0).await.unwrap();
+                            file.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+
+                            // 4. Final flush to commit metadata
+                            file.flush().await.unwrap();
+
                         }
                         None => break,
                     }
@@ -72,6 +83,7 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
 
         let mut snapshot_interval = time::interval(Duration::from_secs(10));
         let mut cleanup_interval = time::interval(Duration::from_millis(100));
+
 
         let snapshot_file = format!("snapshot_{}.json", shard_id);
 
@@ -96,13 +108,33 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
         }
 
         let wal_file = format!("wal_{}.log", shard_id);
-        if let Ok(wal_content) = tokio::fs::read_to_string(&wal_file).await {
-            for line in wal_content.lines() {
-                if let Some(cmd) = parse_command(line) {
-                    apply_db(&mut db, &mut ttl_db, &mut expiry_heap, cmd);
+        if let Ok(wal_content) = tokio::fs::read(&wal_file).await {
+            let mut slice = wal_content.as_slice();
+            
+            while !slice.is_empty() {
+                match bincode::deserialize_from::<_,WalEntry>(&mut slice) {
+                    Ok(entry) => {
+                        match entry {
+                            WalEntry::Set { key, value } => {
+                                apply_db(&mut db, &mut ttl_db, &mut expiry_heap, ParsedCommand::Set { key, value });
+                            },
+                            WalEntry::SetEx { key, value, ttl } => {
+                                apply_db(&mut db, &mut ttl_db, &mut expiry_heap, ParsedCommand::SetEx { key, value, ttl });
+                            },
+                            WalEntry::Del { key } => {
+                                apply_db(&mut db, &mut ttl_db, &mut expiry_heap, ParsedCommand::Del { key });
+                            },
+                            WalEntry::Expire { key, ttl } => {
+                                apply_db(&mut db, &mut ttl_db, &mut expiry_heap, ParsedCommand::Expire { key, ttl });
+                            },
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
         }
+
+        let mut encoded = Vec::with_capacity(128);
 
         loop {
             tokio::select! {
@@ -135,22 +167,31 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
                     }).await.unwrap();
 
 
-                    let _ = wal_tx_clone.try_send(WalCommand::Truncate);
+                    let _ = wal_tx_clone.send(WalCommand::Truncate).await;
                 }
 
                 Some(cmd) = cmd_rx.recv() => {
                     let now = now_ms();
                     match cmd {
                         Command::Set { key, value, resp } => {
-                            let log = format!("SET {} {}\n", key, value);
-                            let _ = wal_tx.try_send(WalCommand::Write(log));
+
+                            let entry = WalEntry::Set { key: key.clone(), value: value.clone() };
+                            // let mut encoded = Vec::with_capacity(64);
+                            encoded.clear();
+                            bincode::serialize_into(&mut encoded, &entry).unwrap();
+                            // let log = format!("SET {} {}\n", key, value);
+                            let _ = wal_tx.send(WalCommand::Write(mem::take(&mut encoded))).await;
                             db.insert(key, value);
                             let _ = resp.send("OK\n".to_string());
                         }
                         Command::SetEx { key, value, ttl, resp } => {
-                            let log = format!("SETEX {} {} {}\n", key, value, ttl);
+                            let entry = WalEntry::SetEx { key: key.clone(), value: value.clone(), ttl };
+                            // let mut encoded = Vec::with_capacity(64);
+                            encoded.clear();
+                            bincode::serialize_into(&mut encoded, &entry).unwrap();
+                            // let log = format!("SETEX {} {} {}\n", key, value, ttl);
                             let expiry = now + ttl * 1000;
-                            let _ = wal_tx.try_send(WalCommand::Write(log));
+                            let _ = wal_tx.send(WalCommand::Write(mem::take(&mut encoded))).await;
                             db.insert(key.clone(), value);
                             ttl_db.insert(key.clone(), expiry);
                             expiry_heap.push(Reverse((expiry, key)));
@@ -167,10 +208,14 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
                             let _ = resp.send(value);
                         }
                         Command::Expire { key, ttl, resp } => {
-                            let log = format!("EXPIRE {} {}\n", key, ttl);
+                            // let log = format!("EXPIRE {} {}\n", key, ttl);
+                            let entry = WalEntry::Expire { key: key.clone(), ttl };
+                            // let mut encoded = Vec::with_capacity(64);
+                            encoded.clear();
+                            bincode::serialize_into(&mut encoded, &entry).unwrap();
                             if db.contains_key(&key) {
                                 let expiry = now + ttl * 1000;
-                                let _ = wal_tx.try_send(WalCommand::Write(log));
+                                let _ = wal_tx.send(WalCommand::Write(mem::take(&mut encoded))).await;
                                 ttl_db.insert(key.clone(), expiry);
                                 expiry_heap.push(Reverse((expiry, key)));
                                 let _ = resp.send("1".into());
@@ -179,8 +224,12 @@ pub fn start_engine(shard_id: usize, mut cmd_rx: Receiver<Command>, wal_tx: Send
                             }
                         }
                         Command::Del { key, resp } => {
-                            let log = format!("DEL {}\n", key);
-                            let _ = wal_tx.try_send(WalCommand::Write(log));
+                            // let log = format!("DEL {}\n", key);
+                            let entry = WalEntry::Del { key: key.clone() };
+                            // let mut encoded = Vec::with_capacity(64);
+                            encoded.clear();
+                            bincode::serialize_into(&mut encoded, &entry).unwrap();
+                            let _ = wal_tx.send(WalCommand::Write(mem::take(&mut encoded))).await;
                             let removed = db.remove(&key).is_some();
                             ttl_db.remove(&key);
                             let _ = resp.send(if removed { "1".into() } else { "0".into() });
